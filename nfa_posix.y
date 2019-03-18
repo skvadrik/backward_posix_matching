@@ -45,8 +45,8 @@ enum
 typedef struct Sub Sub;
 struct Sub
 {
-    char *sp;
-    char *ep;
+    const char *sp;
+    const char *ep;
 };
 
 enum
@@ -92,11 +92,9 @@ int listid;
 List l1, l2;
 
 /* Allocate and initialize State */
-State*
-state(int op, int data, State *out, State *out1)
+State* state(int op, int data, State *out, State *out1)
 {
     State *s;
-    
     nstate++;
     s = malloc(sizeof *s);
     s->lastlist = 0;
@@ -117,8 +115,7 @@ struct Frag
 };
 
 /* Initialize Frag struct. */
-Frag
-frag(State *start, Ptrlist *out)
+Frag frag(State *start, Ptrlist *out)
 {
     Frag n = { start, out };
     return n;
@@ -136,37 +133,29 @@ union Ptrlist
 };
 
 /* Create singleton list containing just outp. */
-Ptrlist*
-list1(State **outp)
+Ptrlist* list1(State **outp)
 {
-    Ptrlist *l;
-    
-    l = (Ptrlist*)outp;
+    Ptrlist *l = (Ptrlist*)outp;
     l->next = NULL;
     return l;
 }
 
 /* Patch the list of states at out to point to start. */
-void
-patch(Ptrlist *l, State *s)
+void patch(Ptrlist *l, State *s)
 {
     Ptrlist *next;
-    
-    for(; l; l=next){
-	next = l->next;
-	l->s = s;
+    for (; l; l = next) {
+        next = l->next;
+        l->s = s;
     }
 }
 
 /* Join the two lists l1 and l2, returning the combination. */
-Ptrlist*
-append(Ptrlist *l1, Ptrlist *l2)
+Ptrlist* append(Ptrlist *l1, Ptrlist *l2)
 {
-    Ptrlist *oldl1;
-    
-    oldl1 = l1;
+    Ptrlist *oldl1 = l1;
     while(l1->next)
-	l1 = l1->next;
+    l1 = l1->next;
     l1->next = l2;
     return oldl1;
 }
@@ -176,13 +165,11 @@ void yyerror(char*);
 int yylex(void);
 State *start;
 
-Frag
-paren(Frag f, int n)
+Frag paren(Frag f, int n)
 {
     State *s1, *s2;
-
     if(n > MPAREN)
-	return f;
+        return f;
     s1 = state(RParen, n, f.start, NULL);
     s2 = state(LParen, n, NULL, NULL);
     patch(f.out, s2);
@@ -192,148 +179,127 @@ paren(Frag f, int n)
 %}
 
 %union {
-    Frag	frag;
-    int	c;
+    Frag frag;
+    int c;
     int nparen;
 }
 
-%token	<c>	CHAR
-%token	EOL
+%token <c> CHAR
+%token EOL
 
-%type	<frag>	alt concat repeat single line
-%type	<nparen>	count
-
-%%
-
-line: alt EOL
-    {
-	State *s;
-
-	$1 = paren($1, 0);
-	s = state(Match, 0, NULL, NULL);
-	patch($1.out, s);
-	start = $1.start;
-	return 0;
-    }
-
-alt:
-    concat
-|	alt '|' concat
-    {
-	State *s = state(Split, 0, $1.start, $3.start);
-	$$ = frag(s, append($1.out, $3.out));
-    }
-;
-
-concat:
-    repeat
-|	concat repeat
-    {
-	patch($2.out, $1.start);
-	$$ = frag($2.start, $1.out);
-    }
-;
-
-repeat:
-    single
-|	single '*'
-    {
-	State *s = state(Split, 0, $1.start, NULL);
-	patch($1.out, s);
-	$$ = frag(s, list1(&s->out1));
-    }
-|	single '+'
-    {
-	State *s = state(Split, 0, $1.start, NULL);
-	patch($1.out, s);
-	$$ = frag($1.start, list1(&s->out1));
-    }
-|	single '?'
-    {
-	State *s = state(Split, 0, $1.start, NULL);
-	$$ = frag(s, append($1.out, list1(&s->out1)));
-    }
-;
-
-count:	{ $$ = ++nparen; }
-
-single:
-    '(' count alt ')'
-    {
-	$$ = paren($3, $2);
-    }
-|	'(' '?' ':' alt ')'
-    {
-	$$ = $4;
-    }
-|	CHAR
-    {
-	State *s = state(Char, $1, NULL, NULL);
-	$$ = frag(s, list1(&s->out));
-    }
-|	'.'
-    {
-	State *s = state(Any, 0, NULL, NULL);
-	$$ = frag(s, list1(&s->out));
-    }
-;
+%type <frag>   alt concat repeat single line
+%type <nparen> count
 
 %%
 
-char *input;
-char *text;
+line
+: alt EOL {
+    State *s;
+    $1 = paren($1, 0);
+    s = state(Match, 0, NULL, NULL);
+    patch($1.out, s);
+    start = $1.start;
+    return 0;
+};
+
+alt
+: concat
+| alt '|' concat {
+    State *s = state(Split, 0, $1.start, $3.start);
+    $$ = frag(s, append($1.out, $3.out));
+};
+
+concat
+: repeat
+| concat repeat {
+    patch($2.out, $1.start);
+    $$ = frag($2.start, $1.out);
+};
+
+repeat
+: single
+| single '*' {
+    State *s = state(Split, 0, $1.start, NULL);
+    patch($1.out, s);
+    $$ = frag(s, list1(&s->out1));
+}
+| single '+' {
+    State *s = state(Split, 0, $1.start, NULL);
+    patch($1.out, s);
+    $$ = frag($1.start, list1(&s->out1));
+}
+| single '?' {
+    State *s = state(Split, 0, $1.start, NULL);
+    $$ = frag(s, append($1.out, list1(&s->out1)));
+};
+
+count
+: { $$ = ++nparen; }
+
+single
+: '(' count alt ')' { $$ = paren($3, $2); }
+| '(' '?' ':' alt ')' { $$ = $4; }
+| CHAR {
+    State *s = state(Char, $1, NULL, NULL);
+    $$ = frag(s, list1(&s->out));
+}
+| '.' {
+    State *s = state(Any, 0, NULL, NULL);
+    $$ = frag(s, list1(&s->out));
+};
+
+%%
+
+const char *input;
+const char *text;
 void dumplist(List*);
 
-int
-yylex(void)
+int yylex(void)
 {
     int c;
 
     if(input == NULL || *input == 0)
-	return EOL;
+    return EOL;
     c = *input++;
     if(strchr("|*?():.", c))
-	return c;
+    return c;
     yylval.c = c;
     return CHAR;
 }
 
-void
-yyerror(char *s)
+void yyerror(char *s)
 {
     fprintf(stderr, "parse error: %s\n", s);
     exit(1);
 }
 
-void
-printmatch(Sub *m, int jump)
+void printmatch(Sub *m, int jump)
 {
-    int i;
-    
-    for(i=jump-1; i<2*nparen+2; i+=jump){
-	if(m[i].sp && m[i].ep)
-	    printf("(%d,%d)", m[i].sp - text, m[i].ep - text);
-	else if(m[i].sp)
-	    printf("(%d,?)", m[i].sp - text);
-	else
-	    printf("(?,?)");
+    for (int i = jump - 1; i < 2 * nparen + 2; i += jump) {
+        if(m[i].sp && m[i].ep) {
+            printf("(%ld,%ld)", m[i].sp - text, m[i].ep - text);
+        }
+        else if(m[i].sp) {
+            printf("(%ld,?)", m[i].sp - text);
+        }
+        else {
+            printf("(?,?)");
+        }
     }
 }
 
-void
-dumplist(List *l)
+void dumplist(List *l)
 {
-    int i;
     Thread *t;
-
-    for(i=0; i<l->n; i++){
-	t = &l->t[i];
-	if(t->state->op != Char && t->state->op != Any && t->state->op != Match)
-	    continue;
-	printf("  ");
-	printf("%d ", t->state->id);
-	printmatch(t->match, 1);
-	printf("\n");
+    for (int i = 0; i < l->n; i++) {
+        t = &l->t[i];
+        if(t->state->op != Char && t->state->op != Any && t->state->op != Match) {
+            continue;
+        }
+        printf("  ");
+        printf("%d ", t->state->id);
+        printmatch(t->match, 1);
+        printf("\n");
     }
 }
 
@@ -341,33 +307,29 @@ dumplist(List *l)
  * Is match a better than match b?
  * If so, return 1; if not, 0.
  */
-int
-_better(Sub *a, Sub *b)
+int _better(Sub *a, Sub *b)
 {
-    int i;
-
     /* Leftmost longest */
-    for(i=0; i<2*nparen+2; i++){
-	if(a[i].sp != b[i].sp)
-	    return b[i].sp == NULL || a[i].sp < b[i].sp;
-	if(a[i].ep != b[i].ep)
-	    return a[i].ep > b[i].ep;
+    for (int i = 0; i < 2 * nparen + 2; i++) {
+        if(a[i].sp != b[i].sp) {
+            return b[i].sp == NULL || a[i].sp < b[i].sp;
+        }
+        if(a[i].ep != b[i].ep) {
+            return a[i].ep > b[i].ep;
+        }
     }
     return 0;
 }
 
-int
-better(Sub *a, Sub *b)
+int better(Sub *a, Sub *b)
 {
-    int r;
-    
-    r = _better(a, b);
-    if(debug > 1){
-	printf("better? ");
-	printmatch(a, 1);
-	printf(" vs ");
-	printmatch(b, 1);
-	printf(": %s\n", r ? "yes" : "no");
+    int r = _better(a, b);
+    if (debug > 1) {
+        printf("better? ");
+        printmatch(a, 1);
+        printf(" vs ");
+        printmatch(b, 1);
+        printf(": %s\n", r ? "yes" : "no");
     }
     return r;
 }
@@ -376,57 +338,58 @@ better(Sub *a, Sub *b)
  * Add s to l, following unlabeled arrows.
  * Next character to read is p.
  */
-void
-addstate(List *l, State *s, Sub *m, char *p)
+void addstate(List *l, State *s, Sub *m, const char *p)
 {
     Sub save0, save1;
 
     if(s == NULL)
-	return;
+    return;
 
     if(s->lastlist == listid){
-	if(!better(m, s->lastthread->match))
-	    return;
-    }else{
-	s->lastlist = listid;
-	s->lastthread = &l->t[l->n++];
+        if(!better(m, s->lastthread->match)) {
+            return;
+        }
+    }
+    else {
+        s->lastlist = listid;
+        s->lastthread = &l->t[l->n++];
     }
     s->lastthread->state = s;
     memmove(s->lastthread->match, m, NSUB*sizeof m[0]);
 
-    switch(s->op){
+    switch(s->op) {
     case Split:
-	/* follow unlabeled arrows */
-	addstate(l, s->out, m, p);
-	addstate(l, s->out1, m, p);
-	break;
-    
+        /* follow unlabeled arrows */
+        addstate(l, s->out, m, p);
+        addstate(l, s->out1, m, p);
+        break;
+
     case LParen:
-	save0 = m[2*s->data];
-	save1 = m[2*s->data+1];
-	/* record left paren location and keep going */
-	m[2*s->data].sp = p;
-	if(save1.sp == NULL)
-	    m[2*s->data+1].sp = p;
-	addstate(l, s->out, m, p);
-	/* restore old information before returning. */
-	m[2*s->data] = save0;
-	m[2*s->data+1] = save1;
-	break;
-    
+        save0 = m[2*s->data];
+        save1 = m[2*s->data+1];
+        /* record left paren location and keep going */
+        m[2*s->data].sp = p;
+        if(save1.sp == NULL)
+            m[2*s->data+1].sp = p;
+        addstate(l, s->out, m, p);
+        /* restore old information before returning. */
+        m[2*s->data] = save0;
+        m[2*s->data+1] = save1;
+        break;
+
     case RParen:
-	save0 = m[2*s->data];
-	save1 = m[2*s->data+1];
-	/* record right paren location and keep going */
-	m[2*s->data].ep = p;
-	m[2*s->data].sp = NULL;
-	if(save1.ep == NULL)
-	    m[2*s->data+1].ep = p;
-	addstate(l, s->out, m, p);
-	/* restore old information before returning. */
-	m[2*s->data] = save0;
-	m[2*s->data+1] = save1;
-	break;
+        save0 = m[2*s->data];
+        save1 = m[2*s->data+1];
+        /* record right paren location and keep going */
+        m[2*s->data].ep = p;
+        m[2*s->data].sp = NULL;
+        if(save1.ep == NULL)
+            m[2*s->data+1].ep = p;
+        addstate(l, s->out, m, p);
+        /* restore old information before returning. */
+        m[2*s->data] = save0;
+        m[2*s->data+1] = save1;
+        break;
     }
 }
 
@@ -436,155 +399,160 @@ addstate(List *l, State *s, Sub *m, char *p)
  * to create next NFA state set nlist.
  * Record best match so far in match.
  */
-void
-step(List *clist, int c, char *p, List *nlist, Sub *match)
+void step(List *clist, int c, const char *p, List *nlist, Sub *match)
 {
     int i;
     Thread *t;
     static Sub m[NSUB];
 
-    if(debug){
-	dumplist(clist);
-	printf("%c (%d)\n", c, c);
+    if (debug) {
+        dumplist(clist);
+        printf("%c (%d)\n", c, c);
     }
 
     listid++;
     nlist->n = 0;
 
     for(i=0; i<clist->n; i++){
-	t = &clist->t[i];
-	switch(t->state->op){
-	case Char:
-	    if(c == t->state->data)
-		addstate(nlist, t->state->out, t->match, p);
-	    break;
+        t = &clist->t[i];
+        switch (t->state->op) {
+        case Char:
+            if(c == t->state->data)
+            addstate(nlist, t->state->out, t->match, p);
+            break;
 
-	case Any:
-	    addstate(nlist, t->state->out, t->match, p);
-	    break;
+        case Any:
+            addstate(nlist, t->state->out, t->match, p);
+            break;
 
-	case Match:
-	    if(better(t->match, match))
-		memmove(match, t->match, NSUB*sizeof match[0]);
-	    break;
-	}
+        case Match:
+            if(better(t->match, match))
+            memmove(match, t->match, NSUB*sizeof match[0]);
+            break;
+        }
     }
-    
+
     /* start a new thread */
     if(match == NULL) // || match[0].sp == NULL)
-	addstate(nlist, start, m, p);
+        addstate(nlist, start, m, p);
 }
 
 /* Compute initial thread list */
-List*
-startlist(State *start, char *p, List *l)
+List* startlist(State *start, const char *p, List *l)
 {
     List empty = {NULL, 0};
     step(&empty, 0, p, l, NULL);
     return l;
-}	
+}
 
-int
-match(State *start, char *p, Sub *m)
+int match(State *start, const char *p, Sub *m)
 {
     int c;
     List *clist, *nlist, *t;
-    char *q;
-    
+    const char *q;
+
     q = p+strlen(p);
     clist = startlist(start, q, &l1);
     nlist = &l2;
     memset(m, 0, NSUB*sizeof m[0]);
-    while(--q>=p){
-	c = *q & 0xFF;
-	step(clist, c, q, nlist, m);
-	t = clist; clist = nlist; nlist = t;
+    while (--q >= p) {
+        c = *q & 0xFF;
+        step(clist, c, q, nlist, m);
+        t = clist; clist = nlist; nlist = t;
     }
     step(clist, 0, p, nlist, m);
     return m[0].sp != NULL;
 }
 
-void
-dump(State *s)
+void dump(State *s)
 {
     if(s == NULL || s->lastlist == listid)
-	return;
+        return;
+
     s->lastlist = listid;
     printf("%d| ", s->id);
+
     switch(s->op){
     case Char:
-	printf("'%c' -> %d\n", s->data, s->out->id);
-	break;
+        printf("'%c' -> %d\n", s->data, s->out->id);
+        break;
 
     case Any:
-	printf(". -> %d\n", s->out->id);
-	break;
+        printf(". -> %d\n", s->out->id);
+        break;
 
     case Split:
-	printf("| -> %d, %d\n", s->out->id, s->out1->id);
-	break;
-    
+        printf("| -> %d, %d\n", s->out->id, s->out1->id);
+        break;
+
     case LParen:
-	printf("( %d -> %d\n", s->data, s->out->id);
-	break;
-    
+        printf("( %d -> %d\n", s->data, s->out->id);
+        break;
+
     case RParen:
-	printf(") %d -> %d\n", s->data, s->out->id);
-	break;
+        printf(") %d -> %d\n", s->data, s->out->id);
+        break;
 
     case Match:
-	printf("match\n");
-	break;
+        printf("match\n");
+        break;
 
     default:
-	printf("??? %d\n", s->op);
-	break;
+        printf("??? %d\n", s->op);
+        break;
     }
 
     dump(s->out);
     dump(s->out1);
 }
 
-int
-main(int argc, char **argv)
+static int test(const char *pattern, const char *string)
 {
-    int i;
     Sub m[NSUB];
 
-    for(;;){
-	if(argc > 1 && strcmp(argv[1], "-d") == 0){
-	    debug++;
-	    argv[1] = argv[0]; argc--; argv++;
-	}
-	else
-	    break;
+    input = pattern;
+    yyparse();
+    if(nparen >= MPAREN) {
+        nparen = MPAREN;
     }
 
-    if(argc < 3){
-	fprintf(stderr, "usage: %s regexp string...\n", argv[0]);
-	return 1;
+    if (debug) {
+        ++listid;
+        dump(start);
     }
-    
-    input = argv[1];
-    yyparse();
-    if(nparen >= MPAREN)
-	nparen = MPAREN;
-    
-    if(debug){
-	++listid;
-	dump(start);
-    }
-    
+
     l1.t = malloc(nstate*sizeof l1.t[0]);
     l2.t = malloc(nstate*sizeof l2.t[0]);
-    for(i=2; i<argc; i++){
-	text = argv[i];	/* used by printmatch */
-	if(match(start, argv[i], m)){
-	    printf("%s: ", argv[i]);
-	    printmatch(m, 2);
-	    printf("\n");
-	}
+
+    text = string; /* used by printmatch */
+
+    if (match(start, string, m)) {
+        printf("%s: ", string);
+        printmatch(m, 2);
+        printf("\n");
     }
+
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    for (;;) {
+        if(argc > 1 && strcmp(argv[1], "-d") == 0) {
+            debug++;
+            argv[1] = argv[0]; argc--; argv++;
+        }
+        else {
+            break;
+        }
+    }
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s regexp string\n", argv[0]);
+        return 1;
+    }
+
+    test(argv[1], argv[2]);
+
     return 0;
 }
 
