@@ -96,7 +96,7 @@ State* state(int op, int data, State *out, State *out1)
 {
     State *s;
     nstate++;
-    s = malloc(sizeof *s);
+    s = (State*)malloc(sizeof *s);
     s->lastlist = 0;
     s->op = op;
     s->data = data;
@@ -161,7 +161,7 @@ Ptrlist* append(Ptrlist *l1, Ptrlist *l2)
 }
 
 int nparen;
-void yyerror(char*);
+void yyerror(const char*);
 int yylex(void);
 State *start;
 
@@ -267,7 +267,7 @@ int yylex(void)
     return CHAR;
 }
 
-void yyerror(char *s)
+void yyerror(const char *s)
 {
     fprintf(stderr, "parse error: %s\n", s);
     exit(1);
@@ -521,8 +521,8 @@ static int test(const char *pattern, const char *string)
         dump(start);
     }
 
-    l1.t = malloc(nstate*sizeof l1.t[0]);
-    l2.t = malloc(nstate*sizeof l2.t[0]);
+    l1.t = (Thread*)malloc(nstate*sizeof l1.t[0]);
+    l2.t = (Thread*)malloc(nstate*sizeof l2.t[0]);
 
     text = string; /* used by printmatch */
 
