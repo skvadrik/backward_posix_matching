@@ -87,7 +87,7 @@ struct List
     int n;
 };
 
-int debug;
+int debug = 0;
 
 State matchstate = { Match };
 int nstate;
@@ -346,11 +346,10 @@ void addstate(List *l, State *s, Sub *m, const char *p)
 {
     Sub save0, save1;
 
-    if(s == NULL)
-    return;
+    if (s == NULL) return;
 
-    if(s->lastlist == listid){
-        if(!better(m, s->lastthread->match)) {
+    if (s->lastlist == listid) {
+        if (!better(m, s->lastthread->match)) {
             return;
         }
     }
@@ -369,30 +368,37 @@ void addstate(List *l, State *s, Sub *m, const char *p)
         break;
 
     case LParen:
-        save0 = m[2*s->data];
-        save1 = m[2*s->data+1];
+        save0 = m[2 * s->data];
+        save1 = m[2 * s->data + 1];
         /* record left paren location and keep going */
-        m[2*s->data].sp = p;
-        if(save1.sp == NULL)
-            m[2*s->data+1].sp = p;
+        m[2 * s->data].sp = p;
+        if (save1.sp == NULL) {
+            m[2 * s->data + 1].sp = p;
+        }
+        /* replace empty match on the last iteration with the current match */
+        else if (save1.sp == save1.ep) {
+            m[2 * s->data + 1].sp = p;
+            m[2 * s->data + 1].ep = m[2 * s->data].ep;
+        }
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
-        m[2*s->data] = save0;
-        m[2*s->data+1] = save1;
+        m[2 * s->data] = save0;
+        m[2 * s->data+1] = save1;
         break;
 
     case RParen:
-        save0 = m[2*s->data];
-        save1 = m[2*s->data+1];
+        save0 = m[2 * s->data];
+        save1 = m[2 * s->data + 1];
         /* record right paren location and keep going */
-        m[2*s->data].ep = p;
-        m[2*s->data].sp = NULL;
-        if(save1.ep == NULL)
-            m[2*s->data+1].ep = p;
+        m[2 * s->data].ep = p;
+        m[2 * s->data].sp = NULL;
+        if (save1.ep == NULL) {
+            m[2 * s->data + 1].ep = p;
+        }
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
-        m[2*s->data] = save0;
-        m[2*s->data+1] = save1;
+        m[2 * s->data] = save0;
+        m[2 * s->data + 1] = save1;
         break;
     }
 }
@@ -577,14 +583,25 @@ int main(int argc, char **argv)
         }
     }
 
-    test("a",        "a",    {0,1});
-    test("(a)",      "a",    {0,1, 0,1});
-    test("(a*)",     "aaa",  {0,3, 0,3});
-    test("(a*)(b*)", "aabb", {0,4, 0,2, 2,4});
-    test("(a*)(a*)", "aa",   {0,2, 0,2, 2,2});
-    test("(a|aa)*",  "aa",   {0,2, 0,2});
-    test("(a)|(a)",  "a",    {0,1, 0,1, -1,-1});
-    test("(a)*(a)*", "a",    {0,1, 0,1, -1,-1});
+    test("a",          "a",        {0,1});
+    test("(a)",        "a",        {0,1, 0,1});
+    test("(a*)",       "aaa",      {0,3, 0,3});
+    test("(a*)(b*)",   "aabb",     {0,4, 0,2, 2,4});
+    test("(a*)(a*)",   "aa",       {0,2, 0,2, 2,2});
+    test("(a|aa)*",    "aa",       {0,2, 0,2});
+    test("(a)|(a)",    "a",        {0,1, 0,1, -1,-1});
+    test("(a)*(a)*",   "a",        {0,1, 0,1, -1,-1});
+    test("(a*)*",      "a",        {0,1, 0,1});
+    test("(a*)*",      "aaaaaa",   {0,6, 0,6});
+    test("((a|b)*)*",  "a",        {0,1, 0,1, 0,1});
+    test("((a|b)*)*",  "aaaaaa",   {0,6, 0,6, 5,6});
+    test("((a|b)*)*",  "ababab",   {0,6, 0,6, 5,6});
+    test("((a|b)*)*",  "bababa",   {0,6, 0,6, 5,6});
+    test("((a|b)*)*",  "b",        {0,1, 0,1, 0,1});
+    test("((a|b)*)*",  "bbbbbb",   {0,6, 0,6, 5,6});
+    test("((a|b)*)*",  "aaaab",    {0,5, 0,5, 4,5});
+    test("(a*)*(x)",   "x",        {0,1, 0,0, 0,1});
+    test("(a*)*(x)",   "ax",       {0,2, 0,1, 1,2});
 
     // forcedassoc
     test("(a|ab)(c|bcd)",       "abcd", {0,4, 0,1, 1,4});
@@ -617,6 +634,80 @@ int main(int argc, char **argv)
     test("(ab|a)(b*)",          "ab",   {0,2, 0,2, 2,2});
 
 /*
+    // nullsubexpr
+    test("(a*)*",      "a",        {0,1, 0,1});
+    test("(a*)*",      "x",        {0,0, 0,0});
+    test("(a*)*",      "aaaaaa",   {0,6, 0,6});
+    test("(a*)*",      "aaaaaax",  {0,6, 0,6});
+    test("(a*)+",      "a",        {0,1, 0,1});
+    test("(a*)+",      "x",        {0,0, 0,0});
+    test("(a*)+",      "aaaaaa",   {0,6, 0,6});
+    test("(a*)+",      "aaaaaax",  {0,6, 0,6});
+    test("(a+)*",      "a",        {0,1, 0,1});
+    test("(a+)*",      "x",        {0,0, -1,-1});
+    test("(a+)*",      "aaaaaa",   {0,6, 0,6});
+    test("(a+)*",      "aaaaaax",  {0,6, 0,6});
+    test("(a+)+",      "a",        {0,1, 0,1});
+//    T0("(a+)+",      "x");
+    test("(a+)+",      "aaaaaa",   {0,6, 0,6});
+    test("(a+)+",      "aaaaaax",  {0,6, 0,6});
+    test("([a]*)*",    "a",        {0,1, 0,1});
+    test("([a]*)*",    "x",        {0,0, 0,0});
+    test("([a]*)*",    "aaaaaa",   {0,6, 0,6});
+    test("([a]*)*",    "aaaaaax",  {0,6, 0,6});
+    test("([a]*)+",    "a",        {0,1, 0,1});
+    test("([a]*)+",    "x",        {0,0, 0,0});
+    test("([a]*)+",    "aaaaaa",   {0,6, 0,6});
+    test("([a]*)+",    "aaaaaax",  {0,6, 0,6});
+    test("([^b]*)*",   "a",        {0,1, 0,1});
+    test("([^b]*)*",   "b",        {0,0, 0,0});
+    test("([^b]*)*",   "aaaaaa",   {0,6, 0,6});
+    test("([^b]*)*",   "aaaaaab",  {0,6, 0,6});
+    test("([ab]*)*",   "a",        {0,1, 0,1});
+    test("([ab]*)*",   "aaaaaa",   {0,6, 0,6});
+    test("([ab]*)*",   "ababab",   {0,6, 0,6});
+    test("([ab]*)*",   "bababa",   {0,6, 0,6});
+    test("([ab]*)*",   "b",        {0,1, 0,1});
+    test("([ab]*)*",   "bbbbbb",   {0,6, 0,6});
+    test("([ab]*)*",   "aaaabcde", {0,5, 0,5});
+    test("([^a]*)*",   "b",        {0,1, 0,1});
+    test("([^a]*)*",   "bbbbbb",   {0,6, 0,6});
+    test("([^a]*)*",   "aaaaaa",   {0,0, 0,0});
+    test("([^ab]*)*",  "ccccxx",   {0,6, 0,6});
+    test("([^ab]*)*",  "ababab",   {0,0, 0,0});
+    test("((z)+|a)*",  "zabcde",   {0,2, 1,2, -1,-1});
+    test("(a)",        "aaa",      {0,1, 0,1});
+    test("(a*)*(x)",   "x",        {0,1, 0,0, 0,1});
+    test("(a*)*(x)",   "ax",       {0,2, 0,1, 1,2});
+    test("(a*)*(x)",   "axa",      {0,2, 0,1, 1,2});
+    test("(a*)+(x)",   "x",        {0,1, 0,0, 0,1});
+    test("(a*)+(x)",   "ax",       {0,2, 0,1, 1,2});
+    test("(a*)+(x)",   "axa",      {0,2, 0,1, 1,2});
+    test("(a*){2}(x)", "x",        {0,1, 0,0, 0,1});
+    test("(a*){2}(x)", "ax",       {0,2, 1,1, 1,2});
+    test("(a*){2}(x)", "axa",      {0,2, 1,1, 1,2});
+    test("(()|.)(b)",     "ab",    {0,2, 0,1, -1,-1, 1,2});
+    test("(()|[ab])(b)",  "ab",    {0,2, 0,1, -1,-1, 1,2});
+    test("(()|[ab])+b",   "aaab",  {0,4, 2,3, -1,-1});
+    test("(.|())(b)",     "ab",    {0,2, 0,1, -1,-1, 1,2});
+    test("([ab]|())(b)",  "ab",    {0,2, 0,1, -1,-1, 1,2});
+    test("([ab]|())+b",   "aaab",  {0,4, 2,3, -1,-1});
+    test("(.?)(b)",       "ab",    {0,2, 0,1, 1,2});
+
+    // rightassoc
+    test("(a|ab)(c|bcd)(d*)",                  "abcd",        {0,4, 0,1, 1,4, 4,4});
+    test("(a|ab)(bcd|c)(d*)",                  "abcd",        {0,4, 0,1, 1,4, 4,4});
+    test("(ab|a)(c|bcd)(d*)",                  "abcd",        {0,4, 0,2, 2,3, 3,4});
+    test("(ab|a)(bcd|c)(d*)",                  "abcd",        {0,4, 0,2, 2,3, 3,4});
+    test("(a*)(b|abc)(c*)",                    "abc",         {0,3, 0,1, 1,2, 2,3});
+    test("(a*)(abc|b)(c*)",                    "abc",         {0,3, 0,1, 1,2, 2,3});
+    test("(a*)(b|abc)(c*)",                    "abc",         {0,3, 0,1, 1,2, 2,3});
+    test("(a*)(abc|b)(c*)",                    "abc",         {0,3, 0,1, 1,2, 2,3});
+    test("(a|ab)(c|bcd)(d|.*)",                "abcd",        {0,4, 0,1, 1,4, 4,4});
+    test("(a|ab)(bcd|c)(d|.*)",                "abcd",        {0,4, 0,1, 1,4, 4,4});
+    test("(ab|a)(c|bcd)(d|.*)",                "abcd",        {0,4, 0,2, 2,3, 3,4});
+    test("(ab|a)(bcd|c)(d|.*)",                "abcd",        {0,4, 0,2, 2,3, 3,4});
+
     // categorize
     test("(a*)(ab)*(b*)",            "abc",    {0,2, 0,1, -1,-1, 1,2});
     test("((a*)(ab)*)((b*)(a*))",    "aba",    {0,3, 0,2, 0,0, 0,2, 2,3, 2,2, 2,3});
