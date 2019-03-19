@@ -315,7 +315,8 @@ int _better(Sub *a, Sub *b)
     /* Leftmost longest */
     for (int i = 0; i < 2 * nparen + 2; i++) {
         if(a[i].sp != b[i].sp) {
-            return b[i].sp == NULL || a[i].sp < b[i].sp;
+            return b[i].sp == NULL
+                || (a[i].sp != NULL && a[i].sp < b[i].sp);
         }
         if(a[i].ep != b[i].ep) {
             return a[i].ep > b[i].ep;
@@ -549,7 +550,7 @@ static int test(const char *pattern, const char *string
         const long ys = pmatch[i];
         const long ye = pmatch[i + 1];
         if (xs != ys || xe != ye) {
-            printf("error in %lu-th group, regexp %s, string %s\n", i, pattern, string);
+            printf("error in %lu-th group, regexp %s, string %s\n", i / 2, pattern, string);
             printf("\texpect: ");
             for (size_t j = 0; j < noffs; j += 2) {
                 printf("(%ld,%ld)", pmatch[j], pmatch[j + 1]);
