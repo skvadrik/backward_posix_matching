@@ -59,7 +59,8 @@ enum
     Split = 3,
     LParen = 4,
     RParen = 5,
-    Match = 6,
+    NParen = 6,
+    Match = 7,
 };
 typedef struct State State;
 typedef struct Thread Thread;
@@ -101,6 +102,7 @@ State* state(int op, int data, State *out, State *out1)
     nstate++;
     s = (State*)malloc(sizeof *s);
     s->lastlist = 0;
+    s->lastthread = 0;
     s->op = op;
     s->data = data;
     s->out = out;
@@ -179,6 +181,52 @@ Frag paren(Frag f, int n)
     return frag(s1, list1(&s2->out));
 }
 
+static Frag find_nparens(State *s)
+{
+    if (s && debug) {
+        printf(">%p, out=%p, out1=%p, op=%d\n", s, s->out, s->out1, s->op);
+    }
+
+    /* patching is not done yet, use a hack on OP to determine end states */
+    if (s == NULL || s->lastlist == listid || s->op < 1 || s->op > Match) {
+        Frag f = { NULL, NULL };
+        return f;
+    }
+
+    s->lastlist = listid;
+
+    Frag f1 = find_nparens(s->out);
+    Frag f2 = find_nparens(s->out1);
+    Frag f;
+
+    if (!f1.start) {
+        f = f2;
+    }
+    else if (!f2.start) {
+        f = f1;
+    }
+    else {
+        patch(f1.out, f2.start);
+        f = {f1.start, f2.out};
+    }
+
+    if (s->op == LParen) {
+        State *x = state(NParen, s->data, f.start, NULL);
+        if (!f.start) {
+            f.out = list1(&x->out);
+        }
+        f.start = x;
+    }
+
+    return f;
+}
+
+static Frag nparens(State *s)
+{
+    ++listid;
+    return find_nparens(s);
+}
+
 %}
 
 %union {
@@ -208,6 +256,18 @@ line
 alt
 : concat
 | alt '|' concat {
+
+    Frag f1 = nparens($1.start);
+    Frag f2 = nparens($3.start);
+    if (f1.start) {
+        patch($3.out, f1.start);
+        $3.out = f1.out;
+    }
+    if (f2.start) {
+        patch($1.out, f2.start);
+        $1.out = f2.out;
+    }
+
     State *s = state(Split, 0, $1.start, $3.start);
     $$ = frag(s, append($1.out, $3.out));
 };
@@ -222,9 +282,10 @@ concat
 repeat
 : single
 | single '*' {
-    State *s = state(Split, 0, $1.start, NULL);
+    Frag f1 = nparens($1.start);
+    State *s = state(Split, 0, $1.start, f1.start);
     patch($1.out, s);
-    $$ = frag(s, list1(&s->out1));
+    $$ = frag(s, append(list1(&s->out1), f1.out));
 }
 | single '+' {
     State *s = state(Split, 0, $1.start, NULL);
@@ -232,8 +293,9 @@ repeat
     $$ = frag($1.start, list1(&s->out1));
 }
 | single '?' {
-    State *s = state(Split, 0, $1.start, NULL);
-    $$ = frag(s, append($1.out, list1(&s->out1)));
+    Frag f1 = nparens($1.start);
+    State *s = state(Split, 0, $1.start, f1.start);
+    $$ = frag(s, append($1.out, f1.start ? f1.out : list1(&s->out1)));
 };
 
 count
@@ -367,6 +429,22 @@ void addstate(List *l, State *s, Sub *m, const char *p)
         addstate(l, s->out1, m, p);
         break;
 
+    case NParen:
+        save0 = m[2 * s->data];
+        save1 = m[2 * s->data + 1];
+        /* record left paren location and keep going */
+        m[2 * s->data].sp = (char*)-1;
+        m[2 * s->data].ep = (char*)-1;
+        if (save1.sp == NULL) {
+            m[2 * s->data + 1].sp = (char*)-1;
+            m[2 * s->data + 1].ep = (char*)-1;
+        }
+        addstate(l, s->out, m, p);
+        /* restore old information before returning. */
+        m[2 * s->data] = save0;
+        m[2 * s->data + 1] = save1;
+        break;
+
     case LParen:
         save0 = m[2 * s->data];
         save1 = m[2 * s->data + 1];
@@ -376,7 +454,7 @@ void addstate(List *l, State *s, Sub *m, const char *p)
             m[2 * s->data + 1].sp = p;
         }
         /* replace empty match on the last iteration with the current match */
-        else if (save1.sp == save1.ep) {
+        else if (save1.sp == save1.ep && save1.sp != (char*)-1) {
             m[2 * s->data + 1].sp = p;
             m[2 * s->data + 1].ep = m[2 * s->data].ep;
         }
@@ -503,6 +581,10 @@ void dump(State *s)
         printf(") %d -> %d\n", s->data, s->out->id);
         break;
 
+    case NParen:
+        printf("<> %d -> %d\n", s->data, s->out->id);
+        break;
+
     case Match:
         printf("match\n");
         break;
@@ -541,14 +623,19 @@ static int test(const char *pattern, const char *string
     int jump = 2;
     int ok = match(start, string, m);
 
+    const size_t noffs = pmatch.size();
+    assert(noffs == (size_t) 2 * nparen + 2);
+
+    for (size_t i = 0; i < noffs; i += 2) {
+        if (m[i + 1].sp == (char*)-1) m[i + 1].sp = 0;
+        if (m[i + 1].ep == (char*)-1) m[i + 1].ep = 0;
+    }
+
     if (ok && debug) {
         printf("%s: ", string);
         printmatch(m, jump);
         printf("\n");
     }
-
-    const size_t noffs = pmatch.size();
-    assert(noffs == (size_t) 2 * nparen + 2);
 
     for (size_t i = 0; i < noffs; i += 2) {
         const long xs = m[i + 1].sp ? m[i + 1].sp - string : -1;
@@ -654,6 +741,16 @@ int main(int argc, char **argv)
     test("(X|Xa|Xab|Xaba|abab|baba|bY|Y)*",    "XababY",      {0,6, 4,6});
     test("(X|Xa|Xab|Xaba|abab|baba|bY|Y)*",    "XabababY",    {0,8, 7,8});
     test("(X|Xa|Xab|Xaba|abab|baba|bY|Y)*",    "XababababY",  {0,10, 8,10});
+    test("((((a?)*)|(aa))*)",                  "aaa",         {0,3, 0,3, 0,3, 0,3, 2,3, -1,-1});
+    test("(((aa)|((a?)*))*)",                  "aaa",         {0,3, 0,3, 0,3, -1,-1, 0,3, 2,3});
+    test("((a?){1,2}|(a)*)*",                  "aaaa",        {0,4, 0,4, -1,-1, 3,4});
+    test("(((a?){2,3}|(a)*))*",                "aaaaa",       {0,5, 0,5, 0,5, -1,-1, 4,5});
+    test("(((a?)|(a?a?))*)",                   "aa",          {0,2, 0,2, 0,2, -1,-1, 0,2});
+    test("((((a)*))*|((((a))*))*)*",           "aa",          {0,2, 0,2, 0,2, 0,2, 1,2, -1,-1, -1,-1, -1,-1, -1,-1});
+    test("(((a)*)*|((a)*)*)*",                 "aa",          {0,2, 0,2, 0,2, 1,2, -1,-1, -1,-1});
+    test("(((a)*)|(((a)*)?))*",                "aa",          {0,2, 0,2, 0,2, 1,2, -1,-1, -1,-1, -1,-1});
+    test("((a*)|(a)*)*",                       "aa",          {0,2, 0,2, 0,2, -1,-1});
+    test("((a)(b)?)*",                         "aba",         {0,3, 2,3, 2,3, -1,-1});
 
     // forcedassoc
     test("(a|ab)(c|bcd)",       "abcd", {0,4, 0,1, 1,4});
