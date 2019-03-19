@@ -63,6 +63,7 @@ a.out "($re)*" abcdef
 #include <string.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -121,6 +122,8 @@ State matchstate = { Match };
 int nstate;
 int listid;
 List l1, l2;
+std::map<const State*, State*> done;
+std::vector<void*> free_list;
 
 /* Allocate and initialize State */
 State* state(int op, int data, State *out, State *out1)
@@ -128,6 +131,7 @@ State* state(int op, int data, State *out, State *out1)
     State *s;
     nstate++;
     s = (State*)malloc(sizeof *s);
+    free_list.push_back(s);
     s->lastlist = 0;
     s->lastthread = 0;
     s->op = op;
@@ -200,7 +204,6 @@ int nparen;
 void yyerror(const char*);
 int yylex(void);
 State *start;
-static std::map<const State*, State*> done;
 
 Frag paren(Frag f, int n)
 {
@@ -275,6 +278,7 @@ static State* copy_state(const State *x, Ptrlist **out)
 
     nstate++;
     State *s = (State*)malloc(sizeof *s);
+    free_list.push_back(s);
     done[x] = s;
     s->lastlist = 0;
     s->lastthread = 0;
@@ -759,11 +763,17 @@ static int test(const char *pattern, const char *string
 
     l1.t = (Thread*)malloc(nstate*sizeof l1.t[0]);
     l2.t = (Thread*)malloc(nstate*sizeof l2.t[0]);
+    free_list.push_back(l1.t);
+    free_list.push_back(l2.t);
 
     text = string; /* used by printmatch */
 
     int jump = 2;
     int ok = match(start, string, m);
+
+    /* free memory */
+    std::for_each(free_list.begin(), free_list.end(), free);
+    free_list.clear();
 
     const size_t noffs = pmatch.size();
     assert(noffs == (size_t) 2 * nparen + 2);
