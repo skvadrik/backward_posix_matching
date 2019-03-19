@@ -439,6 +439,15 @@ void addstate(List *l, State *s, Sub *m, const char *p)
             m[2 * s->data + 1].sp = (char*)-1;
             m[2 * s->data + 1].ep = (char*)-1;
         }
+        /* Replace empty match on the last iteration with the current match.
+        FIXME: just comparing the previous pair of offsets is incorrect,
+        because it doesn't take into account possible outer repetitions (the
+        previous iteration that has empty match may come from a nonempty
+        outer iteration, and then we should not change it. */
+        else if (save1.sp == save1.ep && save1.sp != (char*)-1) {
+            m[2 * s->data + 1].sp = (char*)-1;
+            m[2 * s->data + 1].ep = (char*)-1;
+        }
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -453,7 +462,11 @@ void addstate(List *l, State *s, Sub *m, const char *p)
         if (save1.sp == NULL) {
             m[2 * s->data + 1].sp = p;
         }
-        /* replace empty match on the last iteration with the current match */
+        /* Replace empty match on the last iteration with the current match.
+        FIXME: just comparing the previous pair of offsets is incorrect,
+        because it doesn't take into account possible outer repetitions (the
+        previous iteration that has empty match may come from a nonempty
+        outer iteration, and then we should not change it. */
         else if (save1.sp == save1.ep && save1.sp != (char*)-1) {
             m[2 * s->data + 1].sp = p;
             m[2 * s->data + 1].ep = m[2 * s->data].ep;
@@ -751,6 +764,10 @@ int main(int argc, char **argv)
     test("(((a)*)|(((a)*)?))*",                "aa",          {0,2, 0,2, 0,2, 1,2, -1,-1, -1,-1, -1,-1});
     test("((a*)|(a)*)*",                       "aa",          {0,2, 0,2, 0,2, -1,-1});
     test("((a)(b)?)*",                         "aba",         {0,3, 2,3, 2,3, -1,-1});
+    test("((a)|(b))*",                         "ba",          {0,2, 1,2, 1,2, -1,-1});
+    test("((a)|(b))*",                         "ab",          {0,2, 1,2, -1,-1, 1,2});
+    test("((a?)|(b?))*",                       "ab",          {0,2, 1,2, -1,-1, 1,2});
+    test("((a?)|(b?))*",                       "ba",          {0,2, 1,2, 1,2, -1,-1});
 
     // forcedassoc
     test("(a|ab)(c|bcd)",       "abcd", {0,4, 0,1, 1,4});
