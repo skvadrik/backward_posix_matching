@@ -50,6 +50,8 @@ a.out "($re)*" abcdef
  *    other nonempty iteration of an outer loop (then we shouldn't
  *    change it).
  *
+ *  - Added bounded repetition R{n} and R{n,m}.
+ *
  *  - Minor cosmetic changes (C++, constification, formatting)
  *    just to make it easier for me to hack.
  */
@@ -61,6 +63,7 @@ a.out "($re)*" abcdef
 #include <string.h>
 #include <unistd.h>
 
+#include <map>
 #include <vector>
 
 enum
@@ -182,9 +185,13 @@ void patch(Ptrlist *l, State *s)
 /* Join the two lists l1 and l2, returning the combination. */
 Ptrlist* append(Ptrlist *l1, Ptrlist *l2)
 {
+    if (!l1) return l2;
+    if (!l2) return l1;
+
     Ptrlist *oldl1 = l1;
-    while(l1->next)
-    l1 = l1->next;
+    while(l1->next) {
+        l1 = l1->next;
+    }
     l1->next = l2;
     return oldl1;
 }
@@ -193,6 +200,7 @@ int nparen;
 void yyerror(const char*);
 int yylex(void);
 State *start;
+static std::map<const State*, State*> done;
 
 Frag paren(Frag f, int n)
 {
@@ -251,12 +259,60 @@ static Frag nparens(State *s)
     return find_nparens(s);
 }
 
+static State* copy_state(const State *x, Ptrlist **out)
+{
+    if (x && debug) {
+        printf("copy_state %p out=%p, out1=%p, op=%d\n", x, x->out, x->out1, x->op);
+    }
+
+    /* patching is not done yet, use a hack on OP to determine end states */
+    if (x == NULL || x->op < 1 || x->op > Match) {
+        return NULL;
+    }
+
+    std::map<const State*, State*>::const_iterator y = done.find(x);
+    if (y != done.end()) return y->second;
+
+    nstate++;
+    State *s = (State*)malloc(sizeof *s);
+    done[x] = s;
+    s->lastlist = 0;
+    s->lastthread = 0;
+    s->op = x->op;
+    s->data = x->data;
+    s->id = nstate;
+
+    s->out = copy_state(x->out, out);
+    s->out1 = copy_state(x->out1, out);
+    if (!x->out) {
+        *out = append(*out, list1(&s->out));
+    }
+    if (!x->out1) {
+        s->out1 = NULL;
+        if (s->op == Split) {
+            *out = append(*out, list1(&s->out1));
+        }
+    }
+
+    return s;
+}
+
+Frag copy_frag(const Frag *f)
+{
+    done.clear();
+    Ptrlist *out = NULL;
+    State *s = copy_state(f->start, &out);
+    Frag n = {s, out};
+    return n;
+}
+
 %}
 
 %union {
     Frag frag;
     int c;
     int nparen;
+    int number;
 }
 
 %token <c> CHAR
@@ -264,6 +320,7 @@ static Frag nparens(State *s)
 
 %type <frag>   alt concat repeat single line
 %type <nparen> count
+%type <number> digit number
 
 %%
 
@@ -320,7 +377,54 @@ repeat
     Frag f1 = nparens($1.start);
     State *s = state(Split, 0, $1.start, f1.start);
     $$ = frag(s, append($1.out, f1.start ? f1.out : list1(&s->out1)));
+}
+| single '{' number '}' {
+    const Frag &f0 = copy_frag(&$1);
+    $$ = $1;
+    for (int i = 1; i < $3; ++i) {
+        Frag f = copy_frag(&f0);
+        patch($$.out, f.start);
+        $$.out = f.out;
+    }
+}
+| single '{' number ',' number '}' {
+    const Frag &f0 = copy_frag(&$1);
+    $$ = $1;
+    for (int i = 1; i < $3; ++i) {
+        Frag f = copy_frag(&f0);
+        patch($$.out, f.start);
+        $$.out = f.out;
+    }
+    for (int i = $3; i < $5; ++i) {
+        Frag f = copy_frag(&f0);
+        State *q = state(Split, 0, NULL, f.start);
+        patch($$.out, q);
+        $$.out = append(f.out, list1(&q->out));
+    }
+    if ($3 == 0) {
+        Frag f1 = nparens($1.start);
+        State *s = state(Split, 0, $$.start, f1.start);
+        $$ = frag(s, append($$.out, f1.start ? f1.out : list1(&s->out1)));
+    }
 };
+
+number
+: digit        { $$ = $1; }
+| number digit { $$ = $1 * 10 + $2; }
+;
+
+digit
+: '0' { $$ = 0; }
+| '1' { $$ = 1; }
+| '2' { $$ = 2; }
+| '3' { $$ = 3; }
+| '4' { $$ = 4; }
+| '5' { $$ = 5; }
+| '6' { $$ = 6; }
+| '7' { $$ = 7; }
+| '8' { $$ = 8; }
+| '9' { $$ = 9; }
+;
 
 count
 : { $$ = ++nparen; }
@@ -345,20 +449,21 @@ void dumplist(List*);
 
 int yylex(void)
 {
-    int c;
+    if (input == NULL || *input == 0) {
+        return EOL;
+    }
 
-    if(input == NULL || *input == 0)
-    return EOL;
-    c = *input++;
-    if(strchr("|*?():.", c))
-    return c;
+    int c = *input++;
+    if(strchr("|*?():.{,}0123456789", c)) {
+        return c;
+    }
     yylval.c = c;
     return CHAR;
 }
 
 void yyerror(const char *s)
 {
-    fprintf(stderr, "parse error: %s\n", s);
+    fprintf(stderr, "parse error: %s: %s\n", s, input);
     exit(1);
 }
 
@@ -792,6 +897,14 @@ int main(int argc, char **argv)
     test("((a)|(b))*",                         "ab",          {0,2, 1,2, -1,-1, 1,2});
     test("((a?)|(b?))*",                       "ab",          {0,2, 1,2, -1,-1, 1,2});
     test("((a?)|(b?))*",                       "ba",          {0,2, 1,2, 1,2, -1,-1});
+    test("y{3}",                               "yyy",         {0,3});
+    test("y{0,2}",                             "",            {0,0});
+    test("y{0,2}",                             "y",           {0,1});
+    test("y{0,2}",                             "yy",          {0,2});
+    test("(y){3}",                             "yyy",         {0,3, 2,3});
+    test("(y){0,2}",                           "",            {0,0, -1,-1});
+    test("(y){0,2}",                           "y",           {0,1, 0,1});
+    test("(y){0,2}",                           "yy",          {0,2, 1,2});
 
     // forcedassoc
     test("(a|ab)(c|bcd)",       "abcd", {0,4, 0,1, 1,4});
