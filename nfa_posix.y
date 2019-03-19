@@ -31,10 +31,13 @@ a.out "($re)*" abcdef
  */
 
 %{
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <vector>
 
 enum
 {
@@ -506,11 +509,13 @@ void dump(State *s)
     dump(s->out1);
 }
 
-static int test(const char *pattern, const char *string)
+static int test(const char *pattern, const char *string
+    , const std::vector<long> &pmatch)
 {
     Sub m[NSUB];
 
     input = pattern;
+    nparen = 0;
     yyparse();
     if(nparen >= MPAREN) {
         nparen = MPAREN;
@@ -526,10 +531,34 @@ static int test(const char *pattern, const char *string)
 
     text = string; /* used by printmatch */
 
-    if (match(start, string, m)) {
+    int jump = 2;
+    int ok = match(start, string, m);
+
+    if (ok && debug) {
         printf("%s: ", string);
-        printmatch(m, 2);
+        printmatch(m, jump);
         printf("\n");
+    }
+
+    const size_t noffs = pmatch.size();
+    assert(noffs == (size_t) 2 * nparen + 2);
+
+    for (size_t i = 0; i < noffs; i += 2) {
+        const long xs = m[i + 1].sp ? m[i + 1].sp - string : -1;
+        const long xe = m[i + 1].ep ? m[i + 1].ep - string : -1;
+        const long ys = pmatch[i];
+        const long ye = pmatch[i + 1];
+        if (xs != ys || xe != ye) {
+            printf("error in %lu-th group, regexp %s, string %s\n", i, pattern, string);
+            printf("\texpect: ");
+            for (size_t j = 0; j < noffs; j += 2) {
+                printf("(%ld,%ld)", pmatch[j], pmatch[j + 1]);
+            }
+            printf("\n\tactual: ");
+            printmatch(m, jump);
+            printf("\n");
+            break;
+        }
     }
 
     return 0;
@@ -546,12 +575,15 @@ int main(int argc, char **argv)
             break;
         }
     }
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s regexp string\n", argv[0]);
-        return 1;
-    }
 
-    test(argv[1], argv[2]);
+    test("a",        "a",    {0,1});
+    test("(a)",      "a",    {0,1, 0,1});
+    test("(a*)",     "aaa",  {0,3, 0,3});
+    test("(a*)(b*)", "aabb", {0,4, 0,2, 2,4});
+    test("(a*)(a*)", "aa",   {0,2, 0,2, 2,2});
+    test("(a|aa)*",  "aa",   {0,2, 0,2});
+    test("(a)|(a)",  "a",    {0,1, 0,1, -1,-1});
+    test("(a)*(a)*", "a",    {0,1, 0,1, -1,-1});
 
     return 0;
 }
