@@ -30,6 +30,30 @@ a.out "($re)*" abcdef
  * Can be distributed under the MIT license, see bottom of file.
  */
 
+/* Changes added by Ulya Trofimovich:
+ *
+ *  - Added tests (part of Glenn Fowler test suite, extended by
+ *    Kuklewicz and me). Not extensive!
+ *
+ *  - Fixed a simple bug in comparator (failing to check if
+ *    second offset is nil) that caused false results and eternal
+ *    loops (because comparison wasn't strict total order).
+ *
+ *  - Added negative tags in an attempt to fix the case of empty
+ *    last iteration (a shortcoming of backward matching: going
+ *    from right to left we have no idea if there will be any
+ *    nonempty iterations preceding the last empty iteration).
+ *    Found it difficult to fix: negative tags are not enough, it
+ *    is impossible to tell without additional tracking if the
+ *    empty match on the last iteration was a part of the same
+ *    outer loop (then we need to overwrite it), or a part of some
+ *    other nonempty iteration of an outer loop (then we shouldn't
+ *    change it).
+ *
+ *  - Minor cosmetic changes (C++, constification, formatting)
+ *    just to make it easier for me to hack.
+ */
+
 %{
 #include <assert.h>
 #include <stdio.h>
