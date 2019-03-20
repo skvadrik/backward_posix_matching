@@ -50,7 +50,7 @@ a.out "($re)*" abcdef
  *    other nonempty iteration of an outer loop (then we shouldn't
  *    change it).
  *
- *  - Added bounded repetition R{n} and R{n,m}.
+ *  - Added bounded repetition R{n} and R{n,m} and empty regexp ().
  *
  *  - Minor cosmetic changes (C++, constification, formatting)
  *    just to make it easier for me to hack.
@@ -205,20 +205,28 @@ void yyerror(const char*);
 int yylex(void);
 State *start;
 
-Frag paren(Frag f, int n)
+static Frag paren(Frag f, int n)
 {
     State *s1, *s2;
-    if(n > MPAREN)
-        return f;
+    assert(n <= MPAREN);
     s1 = state(RParen, n, f.start, NULL);
     s2 = state(LParen, n, NULL, NULL);
     patch(f.out, s2);
     return frag(s1, list1(&s2->out));
 }
 
+static Frag paren0(int n)
+{
+    State *s1, *s2;
+    assert(n <= MPAREN);
+    s2 = state(LParen, n, NULL, NULL);
+    s1 = state(RParen, n, s2, NULL);
+    return frag(s1, list1(&s2->out));
+}
+
 static Frag find_nparens(State *s)
 {
-    if (s && debug) {
+    if (s && debug > 1) {
         printf(">%p, out=%p, out1=%p, op=%d\n", s, s->out, s->out1, s->op);
     }
 
@@ -264,7 +272,7 @@ static Frag nparens(State *s)
 
 static State* copy_state(const State *x, Ptrlist **out)
 {
-    if (x && debug) {
+    if (x && debug > 1) {
         printf("copy_state %p out=%p, out1=%p, op=%d\n", x, x->out, x->out1, x->op);
     }
 
@@ -434,7 +442,8 @@ count
 : { $$ = ++nparen; }
 
 single
-: '(' count alt ')' { $$ = paren($3, $2); }
+: '(' count alt ')'   { $$ = paren($3, $2); }
+| '(' count ')'       { $$ = paren0($2); }
 | '(' '?' ':' alt ')' { $$ = $4; }
 | CHAR {
     State *s = state(Char, $1, NULL, NULL);
@@ -756,7 +765,7 @@ static int test(const char *pattern, const char *string
         nparen = MPAREN;
     }
 
-    if (debug) {
+    if (debug > 1) {
         ++listid;
         dump(start);
     }
@@ -915,6 +924,15 @@ int main(int argc, char **argv)
     test("(y){0,2}",                           "",            {0,0, -1,-1});
     test("(y){0,2}",                           "y",           {0,1, 0,1});
     test("(y){0,2}",                           "yy",          {0,2, 1,2});
+    test("()",                                 "",            {0,0, 0,0});
+    test("(){2}",                              "",            {0,0, 0,0});
+    test("(){0,2}",                            "",            {0,0, 0,0});
+    test("(((){0,30}){0,30}){0,30}",           "",            {0,0, 0,0, 0,0, 0,0});
+    test("((a?){0,1000})*",                    "aaaa",        {0,4, 0,4, 3,4});
+
+    test("(((((aa)|((a?)*))*){0,10}){0,10}){0,10}", "",       {0,0, 0,0, 0,0, 0,0, 0,0, -1,-1, 0,0, 0,0});
+    test("(((((aa)|((a?)*))*){0,10}){0,10}){0,10}", "aaa",    {0,3, 0,3, 0,3, 0,3, 0,3, -1,-1, 0,3, 2,3});
+    test("(((((aa)|((a?)*))*){0,10}){0,10}){0,10}", "aaaaa",  {0,5, 0,5, 0,5, 0,5, 0,5, -1,-1, 0,5, 4,5});
 
     // forcedassoc
     test("(a|ab)(c|bcd)",       "abcd", {0,4, 0,1, 1,4});
