@@ -50,6 +50,9 @@ a.out "($re)*" abcdef
  *    other nonempty iteration of an outer loop (then we shouldn't
  *    change it).
  *
+ *  - Solved the problem of empty last iteration described above
+ *    by adding "frozen" flag to each submatch group.
+ *
  *  - Added bounded repetition R{n} and R{n,m} and empty regexp ().
  *
  *  - Minor cosmetic changes (C++, constification, formatting)
@@ -64,6 +67,7 @@ a.out "($re)*" abcdef
 #include <unistd.h>
 
 #include <algorithm>
+#include <climits>
 #include <map>
 #include <vector>
 
@@ -78,6 +82,7 @@ struct Sub
 {
     const char *sp;
     const char *ep;
+    bool freeze;
 };
 
 enum
@@ -124,6 +129,7 @@ int listid;
 List l1, l2;
 std::map<const State*, State*> done;
 std::vector<void*> free_list;
+std::vector<std::pair<int, int> > hier;
 
 /* Allocate and initialize State */
 State* state(int op, int data, State *out, State *out1)
@@ -205,8 +211,14 @@ void yyerror(const char*);
 int yylex(void);
 State *start;
 
+static std::pair<int, int> tag_range(State *x);
+
 static Frag paren(Frag f, int n)
 {
+    if (hier.size() < (size_t)(n + 1)) hier.resize(n + 1);
+    hier[n] = tag_range(f.start);
+    if (debug) printf("hier size: %lu (set %d)\n", hier.size(), n);
+
     State *s1, *s2;
     assert(n <= MPAREN);
     s1 = state(RParen, n, f.start, NULL);
@@ -217,6 +229,10 @@ static Frag paren(Frag f, int n)
 
 static Frag paren0(int n)
 {
+    if (hier.size() < (size_t)(n + 1)) hier.resize(n + 1);
+    hier[n] = std::make_pair(INT_MAX, INT_MIN);
+    if (debug) printf("hier size: %lu (set neg %d)\n", hier.size(), n);
+
     State *s1, *s2;
     assert(n <= MPAREN);
     s2 = state(LParen, n, NULL, NULL);
@@ -316,6 +332,39 @@ Frag copy_frag(const Frag *f)
     State *s = copy_state(f->start, &out);
     Frag n = {s, out};
     return n;
+}
+
+static std::pair<int, int> do_tag_range(State *x)
+{
+    if (x && debug > 1) {
+        printf("tag_range %p out=%p, out1=%p, op=%d\n", x, x->out, x->out1, x->op);
+    }
+
+    /* patching is not done yet, use a hack on OP to determine end states */
+    if (x == NULL || x->lastlist == listid || x->op < 1 || x->op > Match) {
+        return std::make_pair(INT_MAX, INT_MIN);
+    }
+
+    x->lastlist = listid;
+
+    std::pair<int, int> p1, p2, p;
+    p1 = do_tag_range(x->out);
+    p2 = do_tag_range(x->out1);
+    p.first = std::min(p1.first, p2.first);
+    p.second = std::max(p1.second, p2.second);
+
+    if (x->op == LParen) {
+        p.first = std::min(p.first, x->data);
+        p.second = std::max(p.second, x->data);
+    }
+
+    return p;
+}
+
+static std::pair<int, int> tag_range(State *x)
+{
+    ++listid;
+    return do_tag_range(x);
 }
 
 %}
@@ -442,9 +491,15 @@ count
 : { $$ = ++nparen; }
 
 single
-: '(' count alt ')'   { $$ = paren($3, $2); }
-| '(' count ')'       { $$ = paren0($2); }
-| '(' '?' ':' alt ')' { $$ = $4; }
+: '(' count alt ')' {
+    $$ = paren($3, $2);
+}
+| '(' count ')' {
+    $$ = paren0($2);
+}
+| '(' '?' ':' alt ')' {
+    $$ = $4;
+}
 | CHAR {
     State *s = state(Char, $1, NULL, NULL);
     $$ = frag(s, list1(&s->out));
@@ -574,22 +629,32 @@ void addstate(List *l, State *s, Sub *m, const char *p)
     case NParen:
         save0 = m[2 * s->data];
         save1 = m[2 * s->data + 1];
-        /* record left paren location and keep going */
+
+        if (save1.sp != save1.ep && !save1.freeze) {
+            if (debug) printf("fixup for %d (%d - %d)\n", s->data, hier[s->data].first, hier[s->data].second);
+            for (int i = hier[s->data].first; i <= hier[s->data].second; ++i) {
+                m[2 * i + 1].freeze = true;
+            }
+        }
+
+        /* record nil paren location and keep going */
         m[2 * s->data].sp = (char*)-1;
         m[2 * s->data].ep = (char*)-1;
         if (save1.sp == NULL) {
             m[2 * s->data + 1].sp = (char*)-1;
             m[2 * s->data + 1].ep = (char*)-1;
         }
+
         /* Replace empty match on the last iteration with the current match.
-        FIXME: just comparing the previous pair of offsets is incorrect,
+        Note: just comparing the previous pair of offsets is incorrect,
         because it doesn't take into account possible outer repetitions (the
         previous iteration that has empty match may come from a nonempty
         outer iteration, and then we should not change it. */
-        else if (save1.sp == save1.ep && save1.sp != (char*)-1) {
+        else if (save1.sp == save1.ep && !save1.freeze) {
             m[2 * s->data + 1].sp = (char*)-1;
             m[2 * s->data + 1].ep = (char*)-1;
         }
+
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -604,15 +669,17 @@ void addstate(List *l, State *s, Sub *m, const char *p)
         if (save1.sp == NULL) {
             m[2 * s->data + 1].sp = p;
         }
+
         /* Replace empty match on the last iteration with the current match.
-        FIXME: just comparing the previous pair of offsets is incorrect,
+        Note: just comparing the previous pair of offsets is incorrect,
         because it doesn't take into account possible outer repetitions (the
         previous iteration that has empty match may come from a nonempty
         outer iteration, and then we should not change it. */
-        else if (save1.sp == save1.ep && save1.sp != (char*)-1) {
+        else if (save1.sp == save1.ep && !save1.freeze) {
             m[2 * s->data + 1].sp = p;
             m[2 * s->data + 1].ep = m[2 * s->data].ep;
         }
+
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -622,12 +689,21 @@ void addstate(List *l, State *s, Sub *m, const char *p)
     case RParen:
         save0 = m[2 * s->data];
         save1 = m[2 * s->data + 1];
+
+        if (save1.sp != save1.ep && !save1.freeze) {
+            if (debug) printf("fixup for %d (%d - %d)\n", s->data, hier[s->data].first, hier[s->data].second);
+            for (int i = hier[s->data].first; i <= hier[s->data].second; ++i) {
+                m[2 * i + 1].freeze = true;
+            }
+        }
+
         /* record right paren location and keep going */
         m[2 * s->data].ep = p;
         m[2 * s->data].sp = NULL;
         if (save1.ep == NULL) {
             m[2 * s->data + 1].ep = p;
         }
+
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -760,6 +836,7 @@ static int test(const char *pattern, const char *string
 
     input = pattern;
     nparen = 0;
+    hier.clear();
     yyparse();
     if(nparen >= MPAREN) {
         nparen = MPAREN;
@@ -830,6 +907,7 @@ int main(int argc, char **argv)
             break;
         }
     }
+    test("((a*)*)*",   "",         {0,0, 0,0, 0,0});
 
     test("a",          "a",        {0,1});
     test("(a)",        "a",        {0,1, 0,1});
