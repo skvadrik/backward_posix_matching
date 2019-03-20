@@ -50,8 +50,10 @@ a.out "($re)*" abcdef
  *    other nonempty iteration of an outer loop (then we shouldn't
  *    change it).
  *
- *  - Solved the problem of empty last iteration described above
- *    by adding "frozen" flag to each submatch group.
+ *  - Attempted to solve the problem of empty last iteration
+ *    by adding "frozen" flag to each submatch group, but this
+ *    doesn't work where empty repetition is non-optional, e.g.
+ *    (a?){2}.
  *
  *  - Added bounded repetition R{n} and R{n,m} and empty regexp ().
  *
@@ -1007,6 +1009,7 @@ int main(int argc, char **argv)
     test("(){0,2}",                            "",            {0,0, 0,0});
     test("(((){0,30}){0,30}){0,30}",           "",            {0,0, 0,0, 0,0, 0,0});
     test("((a?){0,1000})*",                    "aaaa",        {0,4, 0,4, 3,4});
+    test("(y?){2}",                            "y",           {0,1, 1,1});
 
     test("(((((aa)|((a?)*))*){0,10}){0,10}){0,10}", "",       {0,0, 0,0, 0,0, 0,0, 0,0, -1,-1, 0,0, 0,0});
     test("(((((aa)|((a?)*))*){0,10}){0,10}){0,10}", "aaa",    {0,3, 0,3, 0,3, 0,3, 0,3, -1,-1, 0,3, 2,3});
