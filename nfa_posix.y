@@ -39,21 +39,13 @@ a.out "($re)*" abcdef
  *    second offset is nil) that caused false results and eternal
  *    loops (because comparison wasn't strict total order).
  *
- *  - Added negative tags in an attempt to fix the case of empty
- *    last iteration (a shortcoming of backward matching: going
- *    from right to left we have no idea if there will be any
- *    nonempty iterations preceding the last empty iteration).
- *    Found it difficult to fix: negative tags are not enough, it
- *    is impossible to tell without additional tracking if the
- *    empty match on the last iteration was a part of the same
- *    outer loop (then we need to overwrite it), or a part of some
- *    other nonempty iteration of an outer loop (then we shouldn't
- *    change it).
+ *  - Removed the use of last iteration offsets from comparator:
+ *    using them does fix some of the incorrect comparisons, but
+ *    this is only a coincidence.
  *
- *  - Attempted to solve the problem of empty last iteration
- *    by adding "frozen" flag to each submatch group, but this
- *    doesn't work where empty repetition is non-optional, e.g.
- *    (a?){2}.
+ *  - Added negative tags to fix cases where there is no match on
+ *    the last iteration, but there was a match on some previous
+ *    iteration, like (a(b)?)* vs "aba".
  *
  *  - Added bounded repetition R{n} and R{n,m} and empty regexp ().
  *
@@ -84,7 +76,6 @@ struct Sub
 {
     const char *sp;
     const char *ep;
-    bool freeze;
 };
 
 enum
@@ -125,13 +116,11 @@ struct List
 
 int debug = 0;
 
-State matchstate = { Match };
 int nstate;
 int listid;
 List l1, l2;
 std::map<const State*, State*> done;
 std::vector<void*> free_list;
-std::vector<std::pair<int, int> > hier;
 
 /* Allocate and initialize State */
 State* state(int op, int data, State *out, State *out1)
@@ -213,14 +202,8 @@ void yyerror(const char*);
 int yylex(void);
 State *start;
 
-static std::pair<int, int> tag_range(State *x);
-
 static Frag paren(Frag f, int n)
 {
-    if (hier.size() < (size_t)(n + 1)) hier.resize(n + 1);
-    hier[n] = tag_range(f.start);
-    if (debug) printf("hier size: %lu (set %d)\n", hier.size(), n);
-
     State *s1, *s2;
     assert(n <= MPAREN);
     s1 = state(RParen, n, f.start, NULL);
@@ -231,10 +214,6 @@ static Frag paren(Frag f, int n)
 
 static Frag paren0(int n)
 {
-    if (hier.size() < (size_t)(n + 1)) hier.resize(n + 1);
-    hier[n] = std::make_pair(INT_MAX, INT_MIN);
-    if (debug) printf("hier size: %lu (set neg %d)\n", hier.size(), n);
-
     State *s1, *s2;
     assert(n <= MPAREN);
     s2 = state(LParen, n, NULL, NULL);
@@ -336,39 +315,6 @@ Frag copy_frag(const Frag *f)
     return n;
 }
 
-static std::pair<int, int> do_tag_range(State *x)
-{
-    if (x && debug > 1) {
-        printf("tag_range %p out=%p, out1=%p, op=%d\n", x, x->out, x->out1, x->op);
-    }
-
-    /* patching is not done yet, use a hack on OP to determine end states */
-    if (x == NULL || x->lastlist == listid || x->op < 1 || x->op > Match) {
-        return std::make_pair(INT_MAX, INT_MIN);
-    }
-
-    x->lastlist = listid;
-
-    std::pair<int, int> p1, p2, p;
-    p1 = do_tag_range(x->out);
-    p2 = do_tag_range(x->out1);
-    p.first = std::min(p1.first, p2.first);
-    p.second = std::max(p1.second, p2.second);
-
-    if (x->op == LParen) {
-        p.first = std::min(p.first, x->data);
-        p.second = std::max(p.second, x->data);
-    }
-
-    return p;
-}
-
-static std::pair<int, int> tag_range(State *x)
-{
-    ++listid;
-    return do_tag_range(x);
-}
-
 %}
 
 %union {
@@ -427,9 +373,13 @@ repeat
 : single
 | single '*' {
     Frag f1 = nparens($1.start);
-    State *s = state(Split, 0, $1.start, f1.start);
+
+    State *s = state(Split, 0, $1.start, NULL);
     patch($1.out, s);
-    $$ = frag(s, append(list1(&s->out1), f1.out));
+    $$ = frag($1.start, list1(&s->out1));
+
+    s = state(Split, 0, $$.start, f1.start);
+    $$ = frag(s, append($$.out, f1.start ? f1.out : list1(&s->out1)));
 }
 | single '+' {
     State *s = state(Split, 0, $1.start, NULL);
@@ -546,6 +496,9 @@ void printmatch(Sub *m, int jump)
         else if(m[i].sp) {
             printf("(%ld,?)", m[i].sp - text);
         }
+        else if(m[i].ep) {
+            printf("(?,%ld)", m[i].ep - text);
+        }
         else {
             printf("(?,?)");
         }
@@ -574,12 +527,10 @@ void dumplist(List *l)
 int _better(Sub *a, Sub *b)
 {
     /* Leftmost longest */
-    for (int i = 0; i < 2 * nparen + 2; i++) {
-        if(a[i].sp != b[i].sp) {
-            return b[i].sp == NULL
-                || (a[i].sp != NULL && a[i].sp < b[i].sp);
-        }
+    for (int i = 0; i < 2 * nparen + 2; i += 2) {
         if(a[i].ep != b[i].ep) {
+            if (a[i].ep == NULL) return true;
+            if (b[i].ep == NULL) return false;
             return a[i].ep > b[i].ep;
         }
     }
@@ -608,6 +559,11 @@ void addstate(List *l, State *s, Sub *m, const char *p)
     Sub save0, save1;
 
     if (s == NULL) return;
+    if (debug) {
+        printf(">%d ", s->id);
+        printmatch(m, 1);
+        printf("\n");
+    }
 
     if (s->lastlist == listid) {
         if (!better(m, s->lastthread->match)) {
@@ -631,32 +587,13 @@ void addstate(List *l, State *s, Sub *m, const char *p)
     case NParen:
         save0 = m[2 * s->data];
         save1 = m[2 * s->data + 1];
-
-        if (save1.sp != save1.ep && !save1.freeze) {
-            if (debug) printf("fixup for %d (%d - %d)\n", s->data, hier[s->data].first, hier[s->data].second);
-            for (int i = hier[s->data].first; i <= hier[s->data].second; ++i) {
-                m[2 * i + 1].freeze = true;
-            }
-        }
-
         /* record nil paren location and keep going */
-        m[2 * s->data].sp = (char*)-1;
-        m[2 * s->data].ep = (char*)-1;
+        m[2 * s->data].sp = (char*)1;
+        m[2 * s->data].ep = (char*)1;
         if (save1.sp == NULL) {
-            m[2 * s->data + 1].sp = (char*)-1;
-            m[2 * s->data + 1].ep = (char*)-1;
+            m[2 * s->data + 1].sp = (char*)1;
+            m[2 * s->data + 1].ep = (char*)1;
         }
-
-        /* Replace empty match on the last iteration with the current match.
-        Note: just comparing the previous pair of offsets is incorrect,
-        because it doesn't take into account possible outer repetitions (the
-        previous iteration that has empty match may come from a nonempty
-        outer iteration, and then we should not change it. */
-        else if (save1.sp == save1.ep && !save1.freeze) {
-            m[2 * s->data + 1].sp = (char*)-1;
-            m[2 * s->data + 1].ep = (char*)-1;
-        }
-
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -671,17 +608,6 @@ void addstate(List *l, State *s, Sub *m, const char *p)
         if (save1.sp == NULL) {
             m[2 * s->data + 1].sp = p;
         }
-
-        /* Replace empty match on the last iteration with the current match.
-        Note: just comparing the previous pair of offsets is incorrect,
-        because it doesn't take into account possible outer repetitions (the
-        previous iteration that has empty match may come from a nonempty
-        outer iteration, and then we should not change it. */
-        else if (save1.sp == save1.ep && !save1.freeze) {
-            m[2 * s->data + 1].sp = p;
-            m[2 * s->data + 1].ep = m[2 * s->data].ep;
-        }
-
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -691,21 +617,11 @@ void addstate(List *l, State *s, Sub *m, const char *p)
     case RParen:
         save0 = m[2 * s->data];
         save1 = m[2 * s->data + 1];
-
-        if (save1.sp != save1.ep && !save1.freeze) {
-            if (debug) printf("fixup for %d (%d - %d)\n", s->data, hier[s->data].first, hier[s->data].second);
-            for (int i = hier[s->data].first; i <= hier[s->data].second; ++i) {
-                m[2 * i + 1].freeze = true;
-            }
-        }
-
         /* record right paren location and keep going */
         m[2 * s->data].ep = p;
-        m[2 * s->data].sp = NULL;
         if (save1.ep == NULL) {
             m[2 * s->data + 1].ep = p;
         }
-
         addstate(l, s->out, m, p);
         /* restore old information before returning. */
         m[2 * s->data] = save0;
@@ -738,8 +654,9 @@ void step(List *clist, int c, const char *p, List *nlist, Sub *match)
         t = &clist->t[i];
         switch (t->state->op) {
         case Char:
-            if(c == t->state->data)
-            addstate(nlist, t->state->out, t->match, p);
+            if(c == t->state->data) {
+                addstate(nlist, t->state->out, t->match, p);
+            }
             break;
 
         case Any:
@@ -747,14 +664,13 @@ void step(List *clist, int c, const char *p, List *nlist, Sub *match)
             break;
 
         case Match:
-            if(better(t->match, match))
             memmove(match, t->match, NSUB*sizeof match[0]);
             break;
         }
     }
 
     /* start a new thread */
-    if(match == NULL) // || match[0].sp == NULL)
+    if(match == NULL)
         addstate(nlist, start, m, p);
 }
 
@@ -838,7 +754,6 @@ static int test(const char *pattern, const char *string
 
     input = pattern;
     nparen = 0;
-    hier.clear();
     yyparse();
     if(nparen >= MPAREN) {
         nparen = MPAREN;
@@ -867,8 +782,9 @@ static int test(const char *pattern, const char *string
     assert(noffs == (size_t) 2 * nparen + 2);
 
     for (size_t i = 0; i < noffs; i += 2) {
-        if (m[i + 1].sp == (char*)-1) m[i + 1].sp = 0;
-        if (m[i + 1].ep == (char*)-1) m[i + 1].ep = 0;
+        assert(m[i + 1].sp && m[i + 1].ep);
+        if (m[i + 1].sp == (char*)1) m[i + 1].sp = 0;
+        if (m[i + 1].ep == (char*)1) m[i + 1].ep = 0;
     }
 
     if (ok && debug) {
@@ -909,6 +825,24 @@ int main(int argc, char **argv)
             break;
         }
     }
+
+    test("((((aaa?)((a){3,3}){1,3})){1,2})*", "aaaaaaaaaa", {0,10, 0,10, 5,10, 5,10, 5,7, 7,10, 9,10});
+
+    test("(a|aa)*", "",           {0,0,  -1,-1});
+    test("(a|aa)*", "a",          {0,1,  0,1});
+    test("(a|aa)*", "aa",         {0,2,  0,2});
+    test("(a|aa)*", "aaa",        {0,3,  2,3});
+    test("(a|aa)*", "aaaa",       {0,4,  2,4});
+    test("(a|aa)*", "aaaaa",      {0,5,  4,5});
+    test("(a|aa)*", "aaaaaa",     {0,6,  4,6});
+    test("(a|aa)*", "aaaaaaa",    {0,7,  6,7});
+    test("(a|aa)*", "aaaaaaaa",   {0,8,  6,8});
+    test("(a|aa)*", "aaaaaaaaa",  {0,9,  8,9});
+    test("(a|aa)*", "aaaaaaaaaa", {0,10, 8,10});
+
+    test("(aaa|aa)*", "aaaaaaaaaa", {0,10, 8,10});
+    test("(aa|aaa)*", "aaaaaaaaaa", {0,10, 8,10});
+
     test("((a*)*)*",   "",         {0,0, 0,0, 0,0});
 
     test("a",          "a",        {0,1});
