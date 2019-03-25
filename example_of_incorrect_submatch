@@ -1,0 +1,7 @@
+$ ./nfa_posix_orig '(aaaa|aaa|a)*' 'aaaaaaaaaa'
+aaaaaaaaaa: (0,10)(6,10)
+should have been parsed as (aaaa)(aaaa)(a)(a), that is, (0,10)(9,10)
+
+$ ./nfa_posix_orig '(aaa|aa)*' 'aaaaaaaaaa'
+aaaaaaaaaa: (0,10)(7,10)
+should have been parsed as (aaa)(aaa)(aa)(aa), that is, (0,10)(8,10)
